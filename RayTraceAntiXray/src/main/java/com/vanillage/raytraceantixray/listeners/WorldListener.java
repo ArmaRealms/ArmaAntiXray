@@ -1,8 +1,8 @@
 package com.vanillage.raytraceantixray.listeners;
 
-import com.destroystokyo.paper.antixray.ChunkPacketBlockController;
 import com.vanillage.raytraceantixray.RayTraceAntiXray;
 import com.vanillage.raytraceantixray.antixray.ChunkPacketBlockControllerAntiXray;
+import io.papermc.paper.antixray.ChunkPacketBlockController;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;

@@ -1,12 +1,12 @@
 package com.vanillage.raytraceantixray.tasks;
 
-import com.destroystokyo.paper.antixray.ChunkPacketBlockController;
 import com.vanillage.raytraceantixray.RayTraceAntiXray;
 import com.vanillage.raytraceantixray.antixray.ChunkPacketBlockControllerAntiXray;
 import com.vanillage.raytraceantixray.data.*;
 import com.vanillage.raytraceantixray.util.BlockIterator;
 import com.vanillage.raytraceantixray.util.BlockOcclusionCulling;
 import com.vanillage.raytraceantixray.util.BlockOcclusionCulling.BlockOcclusionGetter;
+import io.papermc.paper.antixray.ChunkPacketBlockController;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.block.Blocks;
@@ -88,14 +88,14 @@ public final class RayTraceCallable implements Callable<Void> {
                     }
 
                     int sectionY = y >> 4;
-                    int minSection = chunk.getMinSection();
+                    int minSectionY = chunk.getMinSectionY();
 
-                    if (sectionY < minSection || sectionY >= chunk.getMaxSection()) {
+                    if (sectionY < minSectionY || sectionY >= chunk.getMaxSectionY()) {
                         return false;
                     }
 
-                    LevelChunkSection section = chunk.getSections()[sectionY - minSection];
-                    return section != null && !section.hasOnlyAir() && solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z))]; // Sections aren't null anymore. Unfortunately, LevelChunkSection#recalcBlockCounts() temporarily resets #nonEmptyBlockCount to 0 due to a Paper optimization.
+                    LevelChunkSection section = chunk.getSections()[sectionY - minSectionY];
+                    return section != null && !section.hasOnlyAir() && solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z), null)]; // Sections aren't null anymore. Unfortunately, LevelChunkSection#recalcBlockCounts() temporarily resets #nonEmptyBlockCount to 0 due to a Paper optimization.
                 }
 
                 int sectionY = y >> 4;
@@ -105,21 +105,21 @@ public final class RayTraceCallable implements Callable<Void> {
                         return UNLOADED_OCCLUDING;
                     }
 
-                    int minSection = chunk.getMinSection();
+                    int minSectionY = chunk.getMinSectionY();
 
-                    if (sectionY < minSection || sectionY >= chunk.getMaxSection()) {
+                    if (sectionY < minSectionY || sectionY >= chunk.getMaxSectionY()) {
                         return false;
                     }
 
-                    LevelChunkSection section = chunk.getSections()[sectionY - minSection];
-                    return section != null && !section.hasOnlyAir() && solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z))]; // Sections aren't null anymore. Unfortunately, LevelChunkSection#recalcBlockCounts() temporarily resets #nonEmptyBlockCount to 0 due to a Paper optimization.
+                    LevelChunkSection section = chunk.getSections()[sectionY - minSectionY];
+                    return section != null && !section.hasOnlyAir() && solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z), null)]; // Sections aren't null anymore. Unfortunately, LevelChunkSection#recalcBlockCounts() temporarily resets #nonEmptyBlockCount to 0 due to a Paper optimization.
                 }
 
                 if (section == null) {
                     return chunk == null && UNLOADED_OCCLUDING;
                 }
 
-                return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z))];
+                return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z), null)];
             }
 
             @Override
@@ -148,14 +148,14 @@ public final class RayTraceCallable implements Callable<Void> {
                         return UNLOADED_OCCLUDING;
                     }
 
-                    int minSection = chunk.getMinSection();
+                    int minSectionY = chunk.getMinSectionY();
 
-                    if (sectionY < minSection || sectionY >= chunk.getMaxSection()) {
+                    if (sectionY < minSectionY || sectionY >= chunk.getMaxSectionY()) {
                         section = null;
                         return false;
                     }
 
-                    section = chunk.getSections()[sectionY - minSection];
+                    section = chunk.getSections()[sectionY - minSectionY];
 
                     if (section == null) { // Sections aren't null anymore.
                         return false;
@@ -166,7 +166,7 @@ public final class RayTraceCallable implements Callable<Void> {
                         return false;
                     }
 
-                    return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z))];
+                    return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z), null)];
                 }
 
                 if (this.sectionY != sectionY) {
@@ -177,14 +177,14 @@ public final class RayTraceCallable implements Callable<Void> {
                         return UNLOADED_OCCLUDING;
                     }
 
-                    int minSection = chunk.getMinSection();
+                    int minSectionY = chunk.getMinSectionY();
 
-                    if (sectionY < minSection || sectionY >= chunk.getMaxSection()) {
+                    if (sectionY < minSectionY || sectionY >= chunk.getMaxSectionY()) {
                         section = null;
                         return false;
                     }
 
-                    section = chunk.getSections()[sectionY - minSection];
+                    section = chunk.getSections()[sectionY - minSectionY];
 
                     if (section == null) { // Sections aren't null anymore.
                         return false;
@@ -195,20 +195,20 @@ public final class RayTraceCallable implements Callable<Void> {
                         return false;
                     }
 
-                    return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z))];
+                    return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z), null)];
                 }
 
                 if (section == null) {
                     return chunk == null && UNLOADED_OCCLUDING;
                 }
 
-                return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z))];
+                return solidGlobal[ChunkPacketBlockControllerAntiXray.GLOBAL_BLOCKSTATE_PALETTE.idFor(getBlockState(section, x, y, z), null)];
             }
 
             @Override
             public void initializeCache(LevelChunk chunk, int chunkX, int sectionY, int chunkZ) {
                 this.chunk = chunk;
-                section = chunk.getSections()[sectionY - chunk.getMinSection()];
+                section = chunk.getSections()[sectionY - chunk.getMinSectionY()];
                 this.chunkX = chunkX;
                 this.sectionY = sectionY;
                 this.chunkZ = chunkZ;

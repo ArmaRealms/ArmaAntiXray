@@ -1,17 +1,21 @@
 package com.vanillage.raytraceantixray.tasks;
 
+import com.google.common.base.Stopwatch;
 import com.vanillage.raytraceantixray.RayTraceAntiXray;
-import com.vanillage.raytraceantixray.util.TimeFormatting;
+import com.vanillage.raytraceantixray.util.TimeFormatter;
 
+import java.time.Instant;
 import java.util.TimerTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
-import java.util.stream.Collectors;
 
 public final class RayTraceTimerTask extends TimerTask {
 
     private final RayTraceAntiXray plugin;
+    private final Stopwatch watch = Stopwatch.createUnstarted();
+    private long timerRuns;
+    private Instant lastNotify = Instant.MIN;
 
     public RayTraceTimerTask(RayTraceAntiXray plugin) {
         this.plugin = plugin;
@@ -20,13 +24,26 @@ public final class RayTraceTimerTask extends TimerTask {
     @Override
     public void run() {
         try {
-            final boolean timings = plugin.isTimingsEnabled();
-            final long startTime = timings ? System.nanoTime() : 0L;
+            if (plugin.isTimingsEnabled()) {
+                watch.start();
+            } else if (watch.isRunning()) {
+                watch.reset();
+                timerRuns = 0;
+                lastNotify = Instant.MIN;
+            }
 
-            plugin.getExecutorService().invokeAll(plugin.getPlayerData().values().stream().map(pd -> pd.getCallable()).collect(Collectors.toList()));
+            plugin.getExecutorService().invokeAll(plugin.getPlayerData().values().stream().map(pd -> pd.getCallable()).toList());
 
-            if (timings) {
-                plugin.getLogger().info((TimeFormatting.format(TimeUnit.NANOSECONDS, System.nanoTime() - startTime, TimeUnit.MICROSECONDS, TimeUnit.MILLISECONDS)) + " per ray trace tick.");
+            if (watch.isRunning()) {
+                watch.stop();
+                timerRuns++;
+                long nanoTime = watch.elapsed(TimeUnit.NANOSECONDS);
+                String formatted = TimeFormatter.STANDARD.format(TimeUnit.NANOSECONDS, nanoTime / timerRuns, TimeUnit.MILLISECONDS, TimeUnit.MICROSECONDS);
+                // print every second
+                if (lastNotify.isBefore(Instant.now())) {
+                    plugin.getLogger().info(formatted + " avg per raytrace tick.");
+                    lastNotify = Instant.now().plusSeconds(1);
+                }
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

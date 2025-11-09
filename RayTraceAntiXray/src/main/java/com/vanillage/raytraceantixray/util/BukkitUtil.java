@@ -2,7 +2,6 @@ package com.vanillage.raytraceantixray.util;
 
 import net.minecraft.server.MinecraftServer;
 import org.bukkit.Bukkit;
-import org.bukkit.craftbukkit.CraftServer;
 
 public class BukkitUtil {
 
@@ -11,19 +10,6 @@ public class BukkitUtil {
 
     public static boolean isRunning() {
         return MinecraftServer.getServer().getTickCount() > 0;
-    }
-
-    public static boolean isReloading() {
-        for (StackTraceElement e : MinecraftServer.getServer().serverThread.getStackTrace()) {
-            if (e.getClassName().equals(CraftServer.class.getName()) && e.getMethodName().equals("reload")) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public static String getMinecraftVersion() {
-        return Bukkit.getBukkitVersion().split("-")[0];
     }
 
     private static boolean isPaper() {
@@ -42,6 +28,11 @@ public class BukkitUtil {
         } catch (Exception e) {
             return null;
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    public static <T extends Throwable> void sneakyThrow(Throwable t) throws T {
+        throw (T) t;
     }
 
 }

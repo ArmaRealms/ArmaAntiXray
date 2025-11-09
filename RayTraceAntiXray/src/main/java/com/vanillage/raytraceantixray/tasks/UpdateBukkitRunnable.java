@@ -42,7 +42,9 @@ public final class UpdateBukkitRunnable extends BukkitRunnable implements Consum
     @Override
     public void run() {
         if (player == null) {
-            plugin.getServer().getOnlinePlayers().forEach(this::update);
+            for (Player p : plugin.getServer().getOnlinePlayers()) {
+                update(p);
+            }
         } else {
             update(player);
         }
@@ -55,20 +57,20 @@ public final class UpdateBukkitRunnable extends BukkitRunnable implements Consum
 
     public void update(Player player) {
         PlayerData playerData = plugin.getPlayerData().get(player.getUniqueId());
-
-        Location loc = player.getLocation();
-        if (loc.getWorld().equals(playerData.getLocations()[0].getWorld())) {
-            VectorialLocation location = new VectorialLocation(loc);
-            Vector vector = location.getVector();
-            vector.setY(vector.getY() + player.getEyeHeight());
-            playerData.setLocations(RayTraceAntiXray.getLocations(player, location));
-        }
+        if (playerData == null)
+            return; // NPCs don't get added to the playerdata map.
 
         World world = playerData.getLocations()[0].getWorld();
 
         if (!player.getWorld().equals(world)) {
             return;
         }
+
+        Location loc = player.getLocation();
+        Vector vec = loc.toVector();
+        vec.setY(vec.getY() + player.getEyeHeight());
+        VectorialLocation vecLoc = new VectorialLocation(world, vec, loc.getDirection());
+        playerData.setLocations(RayTraceAntiXray.getLocations(player, vecLoc));
 
         ConcurrentMap<LongWrapper, ChunkBlocks> chunks = playerData.getChunks();
         ServerLevel serverLevel = ((CraftWorld) world).getHandle();

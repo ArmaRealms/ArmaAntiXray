@@ -1,7 +1,5 @@
 package com.vanillage.raytraceantixray;
 
-import com.destroystokyo.paper.antixray.ChunkPacketBlockController;
-import com.google.common.base.Throwables;
 import com.google.common.collect.MapMaker;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.vanillage.raytraceantixray.antixray.ChunkPacketBlockControllerAntiXray;
@@ -11,11 +9,12 @@ import com.vanillage.raytraceantixray.data.PlayerData;
 import com.vanillage.raytraceantixray.data.VectorialLocation;
 import com.vanillage.raytraceantixray.listeners.PlayerListener;
 import com.vanillage.raytraceantixray.listeners.WorldListener;
-import com.vanillage.raytraceantixray.net.DuplexHandlerImpl;
+import com.vanillage.raytraceantixray.net.DuplexPacketHandler;
 import com.vanillage.raytraceantixray.tasks.RayTraceCallable;
 import com.vanillage.raytraceantixray.tasks.RayTraceTimerTask;
 import com.vanillage.raytraceantixray.tasks.UpdateBukkitRunnable;
 import com.vanillage.raytraceantixray.util.BukkitUtil;
+import io.papermc.paper.antixray.ChunkPacketBlockController;
 import io.papermc.paper.configuration.WorldConfiguration.Anticheat.AntiXray;
 import io.papermc.paper.configuration.type.EngineMode;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -26,6 +25,7 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.craftbukkit.CraftWorld;
@@ -42,6 +42,7 @@ import java.io.File;
 import java.util.Timer;
 import java.util.UUID;
 import java.util.concurrent.*;
+import java.util.logging.Level;
 
 public final class RayTraceAntiXray extends JavaPlugin {
     // private volatile Configuration configuration;
@@ -72,7 +73,7 @@ public final class RayTraceAntiXray extends JavaPlugin {
         // Use a combination of a tick thread (timer) and a ray trace thread pool.
         // The timer schedules tasks (a task per player) to the thread pool and ensures a common and defined tick start and end time without overlap by waiting for the thread pool to finish all tasks.
         // A scheduled thread pool with a task per player would also be possible but then there's no common tick.
-        executorService = Executors.newFixedThreadPool(Math.max(config.getInt("settings.anti-xray.ray-trace-threads"), 1), new ThreadFactoryBuilder().setThreadFactory(Executors.defaultThreadFactory()).setNameFormat("RayTraceAntiXray ray trace thread %d").setDaemon(true).build());
+        executorService = Executors.newFixedThreadPool(Math.max(config.getInt("settings.anti-xray.ray-trace-threads"), 1), new ThreadFactoryBuilder().setThreadFactory(Executors.defaultThreadFactory()).setNameFormat("RayTraceAntiXray raytrace thread %d").setDaemon(true).build());
         // Use a timer instead of a single thread scheduled executor because there is no equivalent for the timer's schedule method.
         timer = new Timer("RayTraceAntiXray tick thread", true);
         timer.schedule(new RayTraceTimerTask(this), 0L, Math.max(config.getLong("settings.anti-xray.ms-per-ray-trace-tick"), 1L));
@@ -88,15 +89,13 @@ public final class RayTraceAntiXray extends JavaPlugin {
         pluginManager.registerEvents(new PlayerListener(this), this);
 
         // Handle reloads/plugin managers
-        for (World w : Bukkit.getWorlds()) WorldListener.handleLoad(this, w);
-        for (Player p : Bukkit.getOnlinePlayers()) {
-            PlayerData data = new PlayerData(getLocations(p, new VectorialLocation(p.getLocation())));
-            data.setCallable(new RayTraceCallable(this, data));
-            getPlayerData().put(p.getUniqueId(), data);
-
-            if (!p.hasMetadata("NPC")) {
-                new DuplexHandlerImpl(this, p)
-                        .attach(p);
+        for (World w : Bukkit.getWorlds())
+            WorldListener.handleLoad(this, w);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            try {
+                tryCreatePlayerDataFor(player);
+            } catch (Exception e) {
+                getLogger().log(Level.SEVERE, "Exception raised while creating data for \"" + player + "\" during plugin load", e);
             }
         }
 
@@ -108,7 +107,17 @@ public final class RayTraceAntiXray extends JavaPlugin {
     @Override
     public void onDisable() {
         HandlerList.unregisterAll(this);
-
+        // The server catches all throwables and may continue to run after disabling this plugin.
+        // We want to ensure as much as possible that everything is left behind in a clean and defined state.
+        // So the goal is to at least attempt to execute all critical sections of code, regardless of what happens before.
+        // Considering errors during error handling and JLS 11.1.3. Asynchronous Exceptions, throwables could potentially be thrown anywhere (even between blocks of code or statements?).
+        // Thus the only way is to nest try-finally statements like this: try { try { } finally { } } finally { }
+        // According to the bytecode of nested try-catch statements in JVMS 3.12, all nested try blocks are entered at the same time.
+        // So we either reach the innermost try block, in which case all blocks will be at least attempt to be executed, or no block is entered at all (e.g. in case of a throwable being thrown before).
+        // Both outcomes yield a defined state of this plugin.
+        // A more intuitive way would be to nest inside of the finally clause like this: try { } finally { try { } finally { } }
+        // However, this doesn't provide the same guarantees as described above.
+        // Additionally, we can add catch clauses to collect suppressed exceptions and rethrow in the last finally clause.
         Throwable throwable = null;
         try {
             try {
@@ -117,8 +126,9 @@ public final class RayTraceAntiXray extends JavaPlugin {
                         // Cleanup stuff.
                         try {
                             for (Player p : Bukkit.getOnlinePlayers()) {
-                                if (p.hasMetadata("NPC")) continue;
-                                DuplexHandlerImpl.detach(p, DuplexHandlerImpl.NAME);
+                                if (p.hasMetadata("NPC"))
+                                    continue;
+                                DuplexPacketHandler.detach(p, DuplexPacketHandler.NAME);
                             }
                         } catch (Throwable t) {
                             if (throwable == null) {
@@ -150,7 +160,7 @@ public final class RayTraceAntiXray extends JavaPlugin {
                         executorService.awaitTermination(1000L, TimeUnit.MILLISECONDS);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        throw new RuntimeException(e);
+                        BukkitUtil.sneakyThrow(e);
                     } finally {
                         try {
                             for (World w : Bukkit.getWorlds()) {
@@ -183,8 +193,7 @@ public final class RayTraceAntiXray extends JavaPlugin {
             }
         } finally {
             if (throwable != null) {
-                Throwables.throwIfUnchecked(throwable);
-                throw new RuntimeException(throwable);
+                BukkitUtil.sneakyThrow(throwable);
             }
         }
 
@@ -194,19 +203,22 @@ public final class RayTraceAntiXray extends JavaPlugin {
     public void reload() {
         onDisable();
         onEnable();
-        getLogger().info(getDescription().getFullName() + " reloaded");
+        getLogger().info(getPluginMeta().getName() + " reloaded");
     }
 
     public void reloadChunks(Iterable<Player> players) {
         for (Player bp : players) {
-            PlayerData data = new PlayerData(getLocations(bp, new VectorialLocation(bp.getLocation())));
-            data.setCallable(new RayTraceCallable(this, data));
-            getPlayerData().put(bp.getUniqueId(), data);
+            try {
+                if (tryCreatePlayerDataFor(bp) == null)
+                    continue;
 
-            ServerPlayer p = ((CraftPlayer) bp).getHandle();
-            var playerChunkManager = p.serverLevel().getChunkSource().chunkMap.level.moonrise$getPlayerChunkLoader();
-            playerChunkManager.removePlayer(p);
-            playerChunkManager.addPlayer(p);
+                ServerPlayer sp = ((CraftPlayer) bp).getHandle();
+                var playerChunkManager = sp.level().moonrise$getPlayerChunkLoader();
+                playerChunkManager.removePlayer(sp);
+                playerChunkManager.addPlayer(sp);
+            } catch (Exception e) {
+                getLogger().log(Level.WARNING, "Failed to reloadChunks for: " + bp, e);
+            }
         }
     }
 
@@ -249,14 +261,49 @@ public final class RayTraceAntiXray extends JavaPlugin {
         return false;
     }
 
+    public boolean validatePlayer(Player player) {
+        return !player.hasMetadata("NPC");
+    }
+
+    public PlayerData tryCreatePlayerDataFor(Player player) {
+        if (!validatePlayer(player))
+            return null;
+
+        return createPlayerDataFor(player, player.getEyeLocation());
+    }
+
+    public PlayerData createPlayerDataFor(Player player, Location location) {
+        PlayerData playerData = new PlayerData(getLocations(player, new VectorialLocation(location)));
+        playerData.setCallable(new RayTraceCallable(this, playerData));
+
+        PlayerData oldData = getPlayerData().get(player.getUniqueId());
+
+        if (oldData != null) {
+            // already has data, use old network handler
+            playerData.setPacketHandler(oldData.getPacketHandler());
+        } else {
+            // create new network handler
+            playerData.setPacketHandler(new DuplexPacketHandler(this, player));
+            try {
+                playerData.getPacketHandler().attach(player);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to attach packet handler to: " + player, e);
+            }
+        }
+
+        getPlayerData().put(player.getUniqueId(), playerData);
+
+        return playerData;
+    }
+
     public static VectorialLocation[] getLocations(Entity entity, VectorialLocation location) {
-        World world = location.getWorld();
+        World world = entity.getWorld();
         ChunkPacketBlockController chunkPacketBlockController = ((CraftWorld) world).getHandle().chunkPacketBlockController;
 
         if (chunkPacketBlockController instanceof ChunkPacketBlockControllerAntiXray && ((ChunkPacketBlockControllerAntiXray) chunkPacketBlockController).rayTraceThirdPerson) {
             VectorialLocation thirdPersonFrontLocation = new VectorialLocation(location);
             thirdPersonFrontLocation.getDirection().multiply(-1.);
-            return new VectorialLocation[] { location, move(entity, new VectorialLocation(world, location.getVector().clone(), location.getDirection())), move(entity, thirdPersonFrontLocation) };
+            return new VectorialLocation[] { location, move(entity, new VectorialLocation(world, location.getVector().clone(), location.getDirection().clone())), move(entity, thirdPersonFrontLocation) };
         }
 
         return new VectorialLocation[] { location };

@@ -1,31 +1,25 @@
 plugins {
     id("java")
-    id("io.papermc.paperweight.userdev") version "1.7.1"
+    id("io.papermc.paperweight.userdev") version "2.0.0-beta.19"
 }
 
 group = "com.vanillage.raytraceantixray"
-version = "1.15.1"
+version = "1.17.3"
 description = "RayTraceAntiXray"
 java.sourceCompatibility = JavaVersion.VERSION_21
 
 repositories {
-    mavenCentral()
     mavenLocal()
-    maven { url = uri("https://papermc.io/repo/repository/maven-public/") }
-    maven { url = uri("https://papermc.io/repo/repository/maven-snapshots/") }
-    maven { url = uri("https://hub.spigotmc.org/nexus/content/groups/public/") }
-    maven { url = uri("https://libraries.minecraft.net/") }
-    //maven { url = uri("https://repo.dmulloy2.net/repository/public/") }
-    maven { url = uri("https://repo.maven.apache.org/maven2/") }
+    mavenCentral()
+
+    maven("https://repo.papermc.io/repository/maven-public/")
+    maven("https://repo.papermc.io/repository/maven-snapshots/")
 }
 
 dependencies {
-    paperweight.paperDevBundle("1.21-R0.1-SNAPSHOT")
+    paperweight.paperDevBundle("1.21.10-R0.1-SNAPSHOT")
 
-    compileOnly("io.papermc.paper:paper-api:1.21-R0.1-SNAPSHOT")
-    //compileOnly("io.papermc.paper:paper-mojangapi:1.21-R0.1-SNAPSHOT")
-    compileOnly("com.mojang:datafixerupper:5.0.28")
-    //compileOnly("com.comphenix.protocol:ProtocolLib:5.0.0")
+    compileOnly("io.papermc.paper:paper-api:1.21.10-R0.1-SNAPSHOT")
 }
 
 java {
@@ -40,11 +34,6 @@ java {
 }
 
 tasks {
-    // Configure reobfJar to run when invoking the build task
-    assemble {
-        dependsOn(reobfJar)
-    }
-
     compileJava {
         // Set the release flag. This configures what version bytecode the compiler will emit, as well as what JDK APIs are usable.
         // See https://openjdk.java.net/jeps/247 for more information.
