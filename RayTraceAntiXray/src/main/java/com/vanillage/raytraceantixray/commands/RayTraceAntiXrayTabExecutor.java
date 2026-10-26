@@ -2,6 +2,7 @@ package com.vanillage.raytraceantixray.commands;
 
 import com.google.common.base.Stopwatch;
 import com.vanillage.raytraceantixray.RayTraceAntiXray;
+import com.vanillage.raytraceantixray.util.BukkitUtil;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
 import org.bukkit.Bukkit;
@@ -94,9 +95,9 @@ public final class RayTraceAntiXrayTabExecutor implements TabExecutor {
                                 .appendNewline()
                                 .append(text("Consider using spark profiler for more information: "))
                                 .appendNewline()
-                                .append(text("  /spark profiler start --interval 1 --thread .*RayTraceAntiXray.* --regex", GOLD)
+                                .append(text("  /spark profiler start --interval 1 --thread (?i)^(?:server.thread|netty|raytraceantixray).* --regex", GOLD)
                                         .hoverEvent(HoverEvent.showText(text("click to suggest", GOLD)))
-                                        .clickEvent(ClickEvent.suggestCommand("/spark profiler start --interval 1 --thread .*RayTraceAntiXray.* --regex")))
+                                        .clickEvent(ClickEvent.suggestCommand("/spark profiler start --interval 1 --thread (?i)^(?:server.thread|netty|raytraceantixray).* --regex")))
                                 .color(YELLOW));
                         return true;
                     } else if (args[1].toLowerCase(Locale.ROOT).equals("on")) {
@@ -128,9 +129,16 @@ public final class RayTraceAntiXrayTabExecutor implements TabExecutor {
                 }
             } else if (args[0].toLowerCase(Locale.ROOT).equals("reload")) {
                 if (sender.hasPermission("raytraceantixray.raytraceantixray.command.reload")) {
-                    Stopwatch w = Stopwatch.createStarted();
-                    plugin.reload();
-                    sender.sendMessage(text("Reloaded in " + w.elapsed(TimeUnit.MILLISECONDS) + "ms", GOLD));
+                    Runnable reload = () -> {
+                        Stopwatch w = Stopwatch.createStarted();
+                        plugin.reload();
+                        sender.sendMessage(text("Reloaded in " + w.elapsed(TimeUnit.MILLISECONDS) + "ms", GOLD));
+                    };
+                    if (BukkitUtil.IS_FOLIA && !Bukkit.isGlobalTickThread()) {
+                        Bukkit.getGlobalRegionScheduler().execute(plugin, reload);
+                    } else {
+                        reload.run();
+                    }
                 } else {
                     sender.sendMessage(text("You don't have permission to reload this plugin.", RED));
                 }

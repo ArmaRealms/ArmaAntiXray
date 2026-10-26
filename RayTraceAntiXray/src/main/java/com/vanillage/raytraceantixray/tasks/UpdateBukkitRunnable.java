@@ -2,150 +2,160 @@ package com.vanillage.raytraceantixray.tasks;
 
 import com.vanillage.raytraceantixray.RayTraceAntiXray;
 import com.vanillage.raytraceantixray.data.*;
+import com.vanillage.raytraceantixray.util.BukkitUtil;
 import io.netty.channel.Channel;
 import io.papermc.paper.threadedregions.scheduler.ScheduledTask;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.Packet;
-import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.World.Environment;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.craftbukkit.entity.CraftPlayer;
 import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitRunnable;
-import org.bukkit.util.Vector;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
 import java.util.Queue;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.Consumer;
 
-public final class UpdateBukkitRunnable extends BukkitRunnable implements Consumer<ScheduledTask> {
+/// this is responsible for entity-local/main-thread tasks
+public final class UpdateBukkitRunnable implements Consumer<ScheduledTask> {
+
     private final RayTraceAntiXray plugin;
-    private final Player player;
+    private final PlayerData data;
 
-    public UpdateBukkitRunnable(RayTraceAntiXray plugin) {
-        this(plugin, null);
-    }
-
-    public UpdateBukkitRunnable(RayTraceAntiXray plugin, Player player) {
+    public UpdateBukkitRunnable(RayTraceAntiXray plugin, PlayerData data) {
         this.plugin = plugin;
-        this.player = player;
-    }
-
-    @Override
-    public void run() {
-        if (player == null) {
-            for (Player p : plugin.getServer().getOnlinePlayers()) {
-                update(p);
-            }
-        } else {
-            update(player);
-        }
+        this.data = data;
     }
 
     @Override
     public void accept(ScheduledTask t) {
-        run();
+        update();
     }
 
-    public void update(Player player) {
-        PlayerData playerData = plugin.getPlayerData().get(player.getUniqueId());
-        if (playerData == null)
-            return; // NPCs don't get added to the playerdata map.
+    public void update() {
+        Player player = data.getPlayer();
+        WorldContext context = data.getContext();
+        World world = context.getWorld();
+        if (!player.getWorld().equals(world))
+            return; // the world has changed, context is renewed in the packet handler
 
-        World world = playerData.getLocations()[0].getWorld();
+        // define current raytrace locations
+        Location loc = player.getEyeLocation();
+        context.setLocations(RayTraceAntiXray.getLocations(player, world, new VectorialLocation(loc)));
 
-        if (!player.getWorld().equals(world)) {
-            return;
-        }
-
-        Location loc = player.getLocation();
-        Vector vec = loc.toVector();
-        vec.setY(vec.getY() + player.getEyeHeight());
-        VectorialLocation vecLoc = new VectorialLocation(world, vec, loc.getDirection());
-        playerData.setLocations(RayTraceAntiXray.getLocations(player, vecLoc));
-
-        ConcurrentMap<LongWrapper, ChunkBlocks> chunks = playerData.getChunks();
+        Queue<Result> results = context.getResults();
+        List<Packet<?>> packetsToSend = new ArrayList<>();
         ServerLevel serverLevel = ((CraftWorld) world).getHandle();
         Environment environment = world.getEnvironment();
-        Queue<Result> results = playerData.getResults();
-        Result result;
 
+        // poll the computed visible blocks and send them to the client
+        Result result;
         while ((result = results.poll()) != null) {
-            ChunkBlocks chunkBlocks = result.getChunkBlocks();
+            ChunkBlocks chunkBlocks = result.chunkBlocks();
 
             // Check if the client still has the chunk loaded and if it wasn't resent in the meantime.
             // Note that even if this check passes, the server could have already unloaded or resent the chunk but the corresponding packet is still in the packet queue.
-            // Technically the null check isn't necessary but we don't need to send an update packet because the client will unload the chunk.
-            if (chunkBlocks.getChunk() == null || chunks.get(chunkBlocks.getKey()) != chunkBlocks) {
+            if (context.getChunk(chunkBlocks.getKey()) != chunkBlocks)
+                continue;
+
+            BlockPos block = result.block();
+            int chunkX = block.getX() >> 4;
+            int chunkZ = block.getZ() >> 4;
+
+            // No need to update an unloaded chunk
+            if (!world.isChunkLoaded(chunkX, chunkZ))
+                continue;
+
+            if (BukkitUtil.IS_FOLIA && !Bukkit.isOwnedByCurrentRegion(world, chunkX, chunkZ)) {
+                // On Folia, dispatch to the region that owns this chunk so we can safely
+                // read block state and send the packet from the correct region thread.
+                // We must NOT drop the result here — the callable already mutated state
+                // (hidden flag / iterator removal) expecting this result to be delivered.
+                final Result capturedResult = result;
+                Bukkit.getRegionScheduler().execute(plugin, world, chunkX, chunkZ, () -> {
+                    // Re-validate: chunk may have been resent or unloaded while the task was queued.
+                    if (context.getChunk(capturedResult.chunkBlocks().getKey()) != capturedResult.chunkBlocks())
+                        return;
+                    if (!world.isChunkLoaded(chunkX, chunkZ))
+                        return;
+
+                    List<Packet<?>> packets = new ArrayList<>();
+                    buildPacketsForResult(packets, capturedResult, serverLevel, environment);
+                    sendPackets(player, packets, false);
+                });
                 continue;
             }
 
-            BlockPos block = result.getBlock();
+            buildPacketsForResult(packetsToSend, result, serverLevel, environment);
+        }
 
-            // Similar to the null check above, this check isn't actually necessary.
-            // However, we don't need to send an update packet because the client will unload the chunk.
-            // Thus we can avoid loading the chunk just for the update packet.
-            if (!world.isChunkLoaded(block.getX() >> 4, block.getZ() >> 4)) {
-                continue;
+        sendPackets(player, packetsToSend, false);
+    }
+
+    /**
+     * Builds the block-update packets for a single result.
+     * Must be called from a thread that owns the region containing the result's block.
+     */
+    private void buildPacketsForResult(List<Packet<?>> packets, Result result, ServerLevel serverLevel, Environment environment) {
+        BlockPos block = result.block();
+        BlockState blockState;
+        BlockEntity blockEntity = null;
+
+        if (result.visible()) {
+            blockState = serverLevel.getBlockState(block);
+
+            if (blockState.hasBlockEntity()) {
+                blockEntity = serverLevel.getBlockEntity(block);
             }
+        } else if (environment == Environment.NETHER) {
+            blockState = Blocks.NETHERRACK.defaultBlockState();
+        } else if (environment == Environment.THE_END) {
+            blockState = Blocks.END_STONE.defaultBlockState();
+        } else if (block.getY() < 0) {
+            blockState = Blocks.DEEPSLATE.defaultBlockState();
+        } else {
+            blockState = Blocks.STONE.defaultBlockState();
+        }
 
-            BlockState blockState;
-            BlockEntity blockEntity = null;
+        packets.add(new ClientboundBlockUpdatePacket(block, blockState));
 
-            if (result.isVisible()) {
-                blockState = serverLevel.getBlockState(block);
-
-                if (blockState.hasBlockEntity()) {
-                    blockEntity = serverLevel.getBlockEntity(block);
-                }
-            } else if (environment == Environment.NETHER) {
-                blockState = Blocks.NETHERRACK.defaultBlockState();
-            } else if (environment == Environment.THE_END) {
-                blockState = Blocks.END_STONE.defaultBlockState();
-            } else if (block.getY() < 0) {
-                blockState = Blocks.DEEPSLATE.defaultBlockState();
-            } else {
-                blockState = Blocks.STONE.defaultBlockState();
-            }
-
-            // We can't send the packet normally (through the packet queue).
-            // We bypass the packet queue since our calculations are based on the packet state (not the server state) as seen by the packet listener.
-            // As described above, the packet queue could for example already contain a chunk unload packet.
-            // Thus we send our packet immediately before that.
-            sendPacketImmediately(player, new ClientboundBlockUpdatePacket(block, blockState));
-
-            if (blockEntity != null) {
-                Packet<ClientGamePacketListener> packet = blockEntity.getUpdatePacket();
-
-                if (packet != null) {
-                    sendPacketImmediately(player, packet);
-                }
-            }
+        if (blockEntity != null) {
+            var packet = blockEntity.getUpdatePacket();
+            if (packet != null)
+                packets.add(packet);
         }
     }
 
-    private static boolean sendPacketImmediately(Player player, Object packet) {
-        ServerGamePacketListenerImpl connection = ((CraftPlayer) player).getHandle().connection;
-
-        if (connection == null || connection.processedDisconnect) {
+    /// callers must not mutate the packets list after passing it to this method
+    private static boolean sendPackets(Player player, Collection<Packet<?>> packets, boolean flush) {
+        if (packets.isEmpty())
             return false;
-        }
+
+        ServerGamePacketListenerImpl connection = ((CraftPlayer) player).getHandle().connection;
+        if (connection == null || !connection.connection.isConnected())
+            return false;
 
         Channel channel = connection.connection.channel;
 
-        if (channel == null || !channel.isOpen()) {
-            return false;
-        }
-
-        channel.writeAndFlush(packet);
+        // wrap whole operation in event loop, otherwise Channel#write will do it for each packet
+        channel.eventLoop().execute(() -> {
+            for (Packet<?> packet : packets) {
+                channel.write(packet);
+            }
+            if (flush)
+                channel.flush();
+        });
         return true;
     }
 }
